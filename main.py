@@ -1,4 +1,5 @@
 import argparse
+import math
 import os
 import sys
 from collections import deque
@@ -67,6 +68,7 @@ class Environment:
             'back_right': (1, -1),
         },
     }
+    FOOD_SECTOR_ORDER = ['L', 'NE', 'N', 'NO', 'O', 'SO', 'S', 'SE']
 
     def __init__(self, filepath):
         self.filepath = filepath
@@ -199,6 +201,43 @@ class Environment:
                 'tile': self.get_tile(x, y),
             }
         return view
+
+    def get_food_direction_sensor(self):
+        """Retorna contagens de comida remanescente em cada direção cardeal/diagonal."""
+        counts = {label: 0 for label in self.FOOD_SECTOR_ORDER}
+        nearest = {label: math.inf for label in self.FOOD_SECTOR_ORDER}
+        cx, cy = self.position
+
+        for food_x, food_y in self.food_positions:
+            dx = food_x - cx
+            dy = food_y - cy
+            if dx == 0 and dy == 0:
+                continue
+            angle = math.degrees(math.atan2(-dy, dx))
+            if angle < 0:
+                angle += 360
+            sector_index = int((angle + 22.5) // 45) % len(self.FOOD_SECTOR_ORDER)
+            sector = self.FOOD_SECTOR_ORDER[sector_index]
+            counts[sector] += 1
+            distance = abs(dx) + abs(dy)
+            if distance < nearest[sector]:
+                nearest[sector] = distance
+
+        center_value = 1 if self.current_tile() == 'o' else 0
+        matrix = [
+            [counts['NO'], counts['N'], counts['NE']],
+            [counts['O'], center_value, counts['L']],
+            [counts['SO'], counts['S'], counts['SE']],
+        ]
+        return {
+            'counts': counts,
+            'matrix': matrix,
+            'total_food': sum(counts.values()) + center_value,
+            'nearest_distance': {
+                label: (None if math.isinf(nearest[label]) else nearest[label])
+                for label in self.FOOD_SECTOR_ORDER
+            },
+        }
 
 
 class Visualizer:
@@ -448,6 +487,18 @@ def parse_arguments():
         help="Exporta cada frame em PNG para a pasta frames_debug",
     )
     parser.add_argument(
+        "--food-sensor",
+        dest="food_sensor",
+        action="store_true",
+        help="Ativa o sensor global de comida para priorizar direções com alimento",
+    )
+    parser.add_argument(
+        "--no-food-sensor",
+        dest="food_sensor",
+        action="store_false",
+        help="Desativa o sensor global de comida (padrão)",
+    )
+    parser.add_argument(
         "--show-log",
         dest="show_log",
         action="store_true",
@@ -460,6 +511,7 @@ def parse_arguments():
         action="store_false",
         help="Oculta o log de movimentos na saída",
     )
+    parser.set_defaults(food_sensor=None)
     return parser.parse_args()
 
 
@@ -468,7 +520,7 @@ class Agent:
 
     MOVE_ORDER = ['N', 'L', 'S', 'O']
 
-    def __init__(self, environment, *, visualizer=None, show_log=True):
+    def __init__(self, environment, *, visualizer=None, show_log=True, use_food_sensor=False):
         self.env = environment
         self.internal_map = {}
         self.visited = set()
@@ -484,6 +536,13 @@ class Agent:
         self.collected_all_food = self.total_food == self.food_collected
         self.action_log.append(f"total food to collect: {self.total_food}")
         self.show_log = show_log
+        self.use_food_sensor = use_food_sensor
+        if self.use_food_sensor:
+            self.action_log.append("food direction sensor enabled")
+        self.food_direction_counts = {}
+        self.food_sensor_matrix = None
+        self.food_sensor_total = 0
+        self.food_sensor_distances = {}
         self.virtual_visited = set()
         self.visit_counts = {}
         self.visible_counts = {}
@@ -590,6 +649,12 @@ class Agent:
         self._capture_frame()
 
     def _sense_and_update(self):
+        if self.use_food_sensor:
+            food_sensor = self.env.get_food_direction_sensor()
+            self.food_direction_counts = food_sensor['counts']
+            self.food_sensor_matrix = food_sensor['matrix']
+            self.food_sensor_total = food_sensor['total_food']
+            self.food_sensor_distances = food_sensor['nearest_distance']
         sensor = self.env.getSensor()
         cx, cy = self.env.get_position()
         center_tile = self.env.current_tile()
@@ -636,6 +701,7 @@ class Agent:
             priority = self._tile_priority(tile)
             priority += self._orientation_bonus(direction, orientation, left_dir, right_dir)
             priority += self._peripheral_bonus(direction, periphery, orientation, left_dir, right_dir, back_dir)
+            priority += self._food_direction_bonus(direction)
             priority -= self._revisit_penalty(next_pos)
             priority -= self._edge_penalty(current, next_pos)
             priority -= self._orientation_visit_penalty(next_pos, direction)
@@ -664,6 +730,34 @@ class Agent:
         elif direction == self._opposite(front):
             bonus -= 2
         return bonus
+
+    def _food_direction_bonus(self, direction):
+        if not self.use_food_sensor or not self.food_direction_counts:
+            return 0
+        primary = self.food_direction_counts.get(direction, 0)
+        diagonal_map = {
+            'N': ('NE', 'NO'),
+            'S': ('SE', 'SO'),
+            'L': ('NE', 'SE'),
+            'O': ('NO', 'SO'),
+        }
+        diag_keys = diagonal_map.get(direction, ())
+        diagonal_total = sum(self.food_direction_counts.get(key, 0) for key in diag_keys)
+        if primary == 0 and diagonal_total == 0:
+            return 0
+
+        distance = self.food_sensor_distances.get(direction)
+        distance_bonus = 0
+        if distance is not None:
+            distance_bonus += max(0, 18 - distance * 2)
+        diag_distances = [
+            dist for key in diag_keys
+            if (dist := self.food_sensor_distances.get(key)) is not None
+        ]
+        if diag_distances:
+            distance_bonus += max(0, 12 - min(diag_distances) * 2)
+
+        return primary * 14 + diagonal_total * 6 + distance_bonus
 
     def _peripheral_bonus(self, direction, periphery, front, left_dir, right_dir, back_dir):
         labels = self._peripheral_labels_for(direction, front, left_dir, right_dir, back_dir)
@@ -955,11 +1049,22 @@ def main():
     if not dump_frames:
         dump_frames = os.environ.get("MAZE_DUMP_FRAMES", "").lower() in {"1", "true", "yes"}
 
+    if args.food_sensor is None:
+        food_sensor_env = os.environ.get("MAZE_FOOD_SENSOR", "").lower() in {"1", "true", "yes", "on"}
+        food_sensor_enabled = food_sensor_env
+    else:
+        food_sensor_enabled = args.food_sensor
+
     default_video = f"maze_run_{maze_size.name.lower()}.mp4"
     video_file = args.video_file or default_video
 
     visualizer = Visualizer(env, output_path=video_file, dump_debug_frames=dump_frames)
-    agent = Agent(env, visualizer=visualizer, show_log=args.show_log)
+    agent = Agent(
+        env,
+        visualizer=visualizer,
+        show_log=args.show_log,
+        use_food_sensor=food_sensor_enabled,
+    )
     agent.run()
     agent.save_visualization()
     agent.print_report()

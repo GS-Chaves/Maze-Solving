@@ -3,12 +3,14 @@
 ## Metodologia de desenvolvimento
 - O programa foi organizado em torno de um agente que explora o labirinto em tempo real, registrando conhecimento parcial e atualizando um mapa interno a cada movimento.
 - A estrategia principal combina exploracao em profundidade com heuristicas baseadas nas leituras laterais e diagonais do sensor, ajudando o agente a evitar trajetos repetitivos sempre que houver alternativas seguras.
+- Um sensor radial opcional calcula, em tempo real, a distribuicao global de comida e orienta o agente para direcoes com maior densidade de recompensas, balanceando as outras heuristicas.
 - As decisoes do agente levam em conta pontuacoes para comida, celulas desconhecidas e aproximacao da saida, alem de penalizar revisitas frequentes e caminhos previamente marcados como pouco promissores.
 
 ## Algoritmos empregados
 - **Exploracao (DFS heuristico)**: o agente avanca com uma busca em profundidade, priorizando vizinhos a partir das heuristicas descritas e mantendo um historico de visitas para diminuir ciclos.
 - **Planejamento de rotas (BFS)**: quando toda a comida possivel foi coletada, uma busca em largura garante um caminho conhecido ate a saida.
 - **Sensoriamento lateral e diagonal**: as informacoes perimetrais sao usadas para ajustar prioridades, premiar corredores livres e evitar passos repetitivos ao reconhecer celulas ja observadas pelos lados.
+- **Sensor radial de comida (opcional)**: agrega toda a comida restante em oito setores (N, NE, L, SE, S, SO, O, NO), ranqueando direcoes a partir da quantidade e proximidade dos itens para acelerar a coleta.
 
 ## Geração dos mapas
 - A classe `MazeMap` constroi labirintos usando um algoritmo de carvamento em profundidade sobre uma malha reticulada, garantindo um caminho principal conectando entrada e saida.
@@ -43,11 +45,18 @@ Caso `maze.txt` nao exista, um novo labirinto sera gerado automaticamente de aco
 - `--video-file CAMINHO`: altera o caminho/arquivo MP4 de saida.
 - `--regenerate`: força a geracao de um novo labirinto, sobrescrevendo o arquivo alvo.
 - `--dump-frames`: salva cada frame como PNG em `frames_debug/` para inspecionar o percurso quadro a quadro.
+- `--food-sensor` / `--no-food-sensor`: ativa ou desativa o sensor radial de comida que prioriza direcoes com maior concentracao de alimento.
 - `--show-log` / `--no-log`: exibe (padrao) ou oculta o log detalhado dos movimentos do agente no terminal.
 
 Variaveis de ambiente opcionais:
 - `MAZE_SIZE`: define o tamanho do labirinto gerado quando `--maze-size` nao e informado (por exemplo, `MAZE_SIZE=large`).
 - `MAZE_DUMP_FRAMES`: ativa `--dump-frames` quando ajustada para `1`, `true` ou `yes`.
+- `MAZE_FOOD_SENSOR`: ativa o sensor radial de comida quando ajustada para `1`, `true`, `yes` ou `on`.
+
+## Sensor radial de comida
+- Quando ativado, o ambiente fornece um sensor 3x3 composto por oito setores que cobrem toda a matriz ate as bordas. Cada celula do sensor representa o total de alimentos naquela direcao (cardinal ou diagonal) e ignora paredes.
+- As contagens sao alimentadas diretamente pelas posicoes reais das comidas restantes, incluindo distancias minimas em cada setor, permitindo ao agente pesar a densidade e a proximidade dos itens na heuristica de movimento.
+- A heuristica adicional aumenta a prioridade de vizinhos alinhados com setores ricos em comida e reduz a dispersao desnecessaria, acelerando a coleta antes do caminho final para a saida.
 
 ## Saida e visualizacao
 - O agente gera um video MP4 suave (`mp4v`) com grade redesenhada, destaques para entrada e saida, alimentos exibidos como marcadores circulares e um avatar com contorno e orientacao visivel.
